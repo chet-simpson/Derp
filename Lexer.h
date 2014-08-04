@@ -1,4 +1,5 @@
 #pragma once
+#include <DerpLex/Derp.h>
 #include <vector>
 #include <map>
 #include <algorithm>
@@ -11,55 +12,96 @@ namespace Derp
     template<class TokenType>
     struct LexerT
     {
-        typedef std::wstring::const_iterator        const_iterator;
-        typedef std::wstring::value_type            char_type;
         typedef TokenType                           token_type;
         typedef typename token_type::tokenid_type   tokenid_type;
         typedef typename token_type::string_type    input_type;
         typedef typename token_type::string_type    string_type;
         typedef typename token_type::value_type     value_type;
+        typedef typename token_type::string_type::const_iterator    const_iterator;
+        typedef typename token_type::string_type::value_type        char_type;
         typedef std::vector<token_type>             output_type;
 
 
-        LexerT() : lineNumber_(0) { }
+        LexerT(ErrorReporting& reportingContext) : reportingContext_(reportingContext), lineNumber_(1) { }
         virtual ~LexerT() {}
+
+        LexerT& operator=(const LexerT&) = delete;
+
 
         virtual void Reset()
         {
             lineNumber_ = 1;
             reservedWords_.clear();
             operators_.clear();
+            tokenNames_.clear();
         }
 
-        virtual void AddOperator(const std::wstring& text, tokenid_type tokenId)
+
+        virtual bool AddOperator(const string_type& text, tokenid_type tokenId)
         {
+            if (tokenNames_.find(tokenId) != tokenNames_.end())
+            {
+                reportingContext_.ReportFatal(
+                    "Operator token `",
+                    static_cast<std::underlying_type<decltype(tokenId)>::type>(tokenId),
+                    "' (", text, ") already exists");
+                return false;
+            }
+
+            if (operators_.find(text) != operators_.end())
+            {
+                reportingContext_.ReportFatal("Operator `", text, "' already exists");
+                return false;
+            }
+
             tokenNames_.insert(std::make_pair(tokenId, text));
             operators_.insert(std::make_pair(text, tokenId));
+
+            return false;
         }
 
-        virtual void AddKeyword(const std::wstring& text, tokenid_type tokenId, bool hidden = false)
+
+        virtual bool AddKeyword(const string_type& text, tokenid_type tokenId, bool hidden = false)
         {
+            if (tokenNames_.find(tokenId) != tokenNames_.end())
+            {
+                reportingContext_.ReportFatal(
+                    "Reserved word token `",
+                    static_cast<std::underlying_type<decltype(tokenId)>::type>(tokenId),
+                    "' (", text, ") already exists");
+                return false;
+            }
+
+            if (hidden == false && reservedWords_.find(text) != reservedWords_.end())
+            {
+                reportingContext_.ReportFatal("Reserved word `", text, "' already exists");
+                return false;
+            }
+
             tokenNames_.insert(std::make_pair(tokenId, text));
             if (hidden == false)
             {
                 reservedWords_.insert(std::make_pair(text, tokenId));
             }
+
+            return true;
         }
 
-        virtual std::wstring getTokenName(tokenid_type tokenId) const
+
+        virtual string_type getTokenName(tokenid_type tokenId) const
         {
             auto word = tokenNames_.find(tokenId);
             return word == tokenNames_.end() ? L"<UNKNOWN>" : word->second;
         }
 
 
-        virtual output_type Tokenize(const input_type& input, bool resetLineNumber = true)
+        virtual output_type Tokenize(const input_type& input, size_t lineNumber = 1)
         {
             output_type tokens;
 
-            if (resetLineNumber)
+            if (lineNumber > 0)
             {
-                lineNumber_ = 1;
+                lineNumber_ = lineNumber;
             }
 
             auto inputBegin = input.cbegin(), inputEnd = input.cend();
@@ -67,7 +109,7 @@ namespace Derp
             {
                 token_type token;
 
-                auto tokenEnd = ParseToken(inputBegin, inputEnd, token);
+                auto tokenEnd = Tokenize(inputBegin, inputEnd, token);
                 tokens.push_back(token);
                 if (token.isValid() == false && inputBegin == tokenEnd && tokenEnd != inputEnd)
                 {
@@ -80,29 +122,26 @@ namespace Derp
             return tokens;
         }
 
-
-    protected:
-
-        virtual bool isspace(char_type ch) const { return ch == ' ' || ch == '\t'; }
-        virtual bool isnewline(char_type ch) const { return ch == '\n'; }
-        virtual bool isstrbegin(char_type ch) const { return ch == '"'; }
-        virtual bool isstrend(char_type ch) const { return ch == '"'; }
-        virtual bool isidentbegin(char_type ch) const { return ch == '_' || std::isalpha(ch); }
-        virtual bool isvarbegin(char_type ch) const { return ch == '$'; }
-        virtual bool isident(char_type ch) const { return ch == '_' || std::isalnum(ch); }
-
-
         //  If inputBegin and inputEnd are the same inputBegin is returned and outputToken is set to invalid.
-        virtual const_iterator ParseToken(
+        virtual const_iterator Tokenize(
             const_iterator inputBegin,
             const_iterator inputEnd,
             token_type& outputToken)
         {
+            outputToken = token_type(tokenid_type::Invalid, lineNumber_, token_type::string_type());
+
+            //  Skip comments
+            if (inputBegin != inputEnd && iscommentchar(*inputBegin))      //  Comment
+            {
+                while (inputBegin != inputEnd && isnewline(*inputBegin) == false)
+                {
+                    ++inputBegin;
+                }
+            }
+
             //  Reset token and stuff
             const char_type firstChar = inputBegin == inputEnd ? 0 : *inputBegin;
             const_iterator tokenEnd = inputBegin;
-
-            outputToken = token_type(tokenid_type::Invalid, lineNumber_, token_type::string_type());
 
             if (inputBegin == inputEnd)
             {
@@ -122,10 +161,10 @@ namespace Derp
             }
             else if (std::isdigit(firstChar))   //  Integer literal
             {
+                // This needs to work a lot differently. It doesn't take into account negative numbers.
                 tokenEnd = ParseIntegerToken(inputBegin, inputEnd, outputToken);
             }
-            
-            else if (isvarbegin(firstChar))   //  variable
+            else if (isvarstart(firstChar))     //  variable
             {
                 tokenEnd = ParseVariableToken(inputBegin, inputEnd, outputToken);
             }
@@ -137,6 +176,15 @@ namespace Derp
             {
                 tokenEnd = ParseOperatorToken(inputBegin, inputEnd, outputToken);
             }
+            else
+            {
+                reportingContext_.ReportError(lineNumber_, "Unknown character `", firstChar, "` in input stream.");
+                std::advance(tokenEnd, 1);
+                outputToken = token_type(
+                    tokenid_type::Invalid,
+                    lineNumber_,
+                    token_type::string_type(inputBegin, tokenEnd));
+            }
 
             lineNumber_ += std::count_if(
                 inputBegin, tokenEnd,
@@ -144,6 +192,21 @@ namespace Derp
 
             return tokenEnd;
         }
+
+
+    protected:
+
+        virtual bool isspace(char_type ch) const { return ch == char_type(' ') || ch == char_type('\t'); }
+        virtual bool isnewline(char_type ch) const { return ch == char_type('\n'); }
+        virtual bool isstrbegin(char_type ch) const { return ch == char_type('"'); }
+        virtual bool isstrend(char_type ch) const { return ch == char_type('"'); }
+        virtual bool isidentbegin(char_type ch) const { return ch == char_type('_') || std::isalpha(ch); }
+        virtual bool isvarstart(char_type ch) const { return ch == char_type('$'); }
+        virtual bool isvarbegin(char_type ch) const { return isidentbegin(ch); }
+        virtual bool isvarchar(char_type ch) const { return isident(ch) || ch == char_type('.'); }
+        virtual bool isident(char_type ch) const { return ch == char_type('_') || std::isalnum(ch); }
+        virtual bool iscommentchar(char_type ch) const { return ch == char_type('#'); }
+
 
         virtual const_iterator ParseWhitespaceToken(
             const_iterator inputBegin,
@@ -187,7 +250,7 @@ namespace Derp
             auto operatorBegin = inputBegin;
             auto operatoeEnd = inputBegin;
             string_type operatorText;
-            while (operatoeEnd != inputEnd && operatorText.size() < 3 && ispunct(*operatoeEnd))
+            while (operatoeEnd != inputEnd && operatorText.size() < maximumOperatorSize_ && ispunct(*operatoeEnd))
             {
                 operatorText.push_back(*operatoeEnd);
                 std::advance(operatoeEnd, 1);
@@ -205,7 +268,6 @@ namespace Derp
 
                 operatorText.pop_back();
             }
-
 
             return operatoeEnd;
         }
@@ -255,17 +317,16 @@ namespace Derp
             auto identifierEnd = inputBegin;
 
             //  If this is a beginning character skip it.
-            if (isvarbegin(*identifierEnd) == false)
+            if (isvarstart(*identifierEnd) == false)
             {
                 throw std::runtime_error("This is not a variable!");
             }
 
             std::advance(identifierEnd, 1);
-            if (isidentbegin(*identifierEnd))
+            if (isvarbegin(*identifierEnd))
             {
-                identifierEnd = std::find_if_not(
-                    identifierEnd, inputEnd,
-                    [this](char_type ch) -> bool { return this->isident(ch); });
+                auto isvarchar = [this](char_type ch) -> bool { return this->isvarchar(ch); };
+                identifierEnd = std::find_if_not(identifierEnd, inputEnd, isvarchar);
             }
 
             const token_type::string_type identifier(identifierBegin, identifierEnd);
@@ -294,13 +355,15 @@ namespace Derp
                 lineNumber_,
                 token_type::string_type(stringBegin, stringEnd),
                 value_type(value_type::String, token_type::string_type(stringBegin, stringEnd)));
-            if (stringEnd != inputEnd && isstrend(*stringEnd))
+            if (stringEnd == inputEnd)
+            {
+                reportingContext_.ReportError(lineNumber_, "Unterminated string literal");
+            }
+            else if (stringEnd != inputEnd && isstrend(*stringEnd))
             {
                 std::advance(stringEnd, 1);
             }
 
-            // FIXME: should report error
-            if (stringEnd == inputEnd) {}
 
             return stringEnd;
         }
@@ -331,10 +394,13 @@ namespace Derp
 
     protected:
 
-        std::size_t lineNumber_;
-        std::map<std::wstring, tokenid_type> reservedWords_;
-        std::map<std::wstring, tokenid_type> operators_;
-        std::map<tokenid_type, std::wstring> tokenNames_;
+        static const std::size_t maximumOperatorSize_ = 5;
+
+        ErrorReporting&                         reportingContext_;
+        std::size_t                             lineNumber_;
+        std::map<string_type, tokenid_type>    reservedWords_;
+        std::map<string_type, tokenid_type>    operators_;
+        std::map<tokenid_type, string_type>    tokenNames_;
     };
 
 }

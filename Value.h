@@ -1,40 +1,54 @@
 #pragma once
+#include <cstdint>
+#include <string>
+#include <vector>
 
 
 namespace Derp
 {
+
     struct Value
     {
         enum Type
         {
             Invalid,
-            Integer,
-            Identifier,
+            Identifier,     //  Symbolic literal
             Variable,
-            String
+            Tuple,
+            Boolean,        //  Literal
+            Integer,        //  Literal
+            String,         //  Literal
         };
 
         typedef Type typeid_type;
         typedef std::wstring string_type;
         typedef std::int64_t integer_type;
+        typedef std::vector<Value> tuple_type;
 
-        explicit Value() : typeId(Invalid), integer(0) {}
+        Value();
+        Value(typeid_type typeId, string_type text);
+        Value(const bool& boolean, nullptr_t);
+        explicit Value(integer_type integer);
+        explicit Value(string_type text);
+        explicit Value(tuple_type data);
 
-        Value(typeid_type typeId, string_type text)
-            : typeId(typeId), text(std::move(text)), integer(0)
-        {}
-
-        explicit Value(integer_type integer)
-            : typeId(Integer), text(std::to_wstring(integer)), integer(integer)
-        {}
 
         bool isValid() const { return typeId != Invalid; }
-
         typeid_type getType() const { return typeId; }
-        const string_type& getText() const { return text; }
-        const string_type& getIdentifier() const { return text; }
-        const string_type& getVariable() const { return text; }
-        integer_type getInteger() const { return integer; }
+
+        string_type to_string() const;
+        const string_type& getTextValue() const;
+        const string_type& getString() const;
+        const string_type& getIdentifier() const;
+        const string_type& getVariable() const;
+        integer_type getInteger() const;
+
+        const tuple_type::size_type getTupleSize() const;
+        const tuple_type& getTupleData() const;
+        tuple_type::const_iterator begin() const;
+        tuple_type::const_iterator end() const;
+        tuple_type::iterator begin();
+        tuple_type::iterator end();
 
 
     private:
@@ -42,6 +56,9 @@ namespace Derp
         typeid_type     typeId;
         string_type     text;
         integer_type    integer;
+        bool            boolean;
+        tuple_type      tuple_data;
     };
+
 }
 

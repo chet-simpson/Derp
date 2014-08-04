@@ -1,44 +1,10 @@
 #pragma once
-#include "Derp.h"
-#include "Debug.h"
-#include <iostream>
-#include <string>
+#include <DerpLex/Derp.h>
 #include <sstream>
 
 
 namespace Derp
 {
-    struct ErrorReporting
-    {
-        virtual ~ErrorReporting(){}
-
-        template<class MessageType, class... Args>
-        void ReportError(const MessageType& msg, const Args&... args)
-        {
-            std::wostringstream out;
-            internal_ReportError(Concat(out, "Error: ", msg, args...).str());
-        }
-
-        template<class MessageType, class... Args>
-        void ReportWarning(const MessageType& msg, const Args&... args)
-        {
-            std::wostringstream out;
-            internal_ReportError("Warning: ", Concat(out, msg, args...).str());
-        }
-
-        template<typename Stream, typename ...Args>
-        Stream& Concat(Stream& o, const Args&... args)
-        {
-            auto x = std::initializer_list<int>{ ((o << args), 0)... };
-            return o;
-        }
-
-        virtual void internal_ReportError(const std::wstring& msg)
-        {
-            std::wcout << msg << std::endl;
-        }
-
-    };
 
     template<class LexerType>
     struct TokenSequence
@@ -48,9 +14,10 @@ namespace Derp
         typedef typename token_type::tokenid_type   tokenid_type;
         typedef typename input_type::const_iterator const_iterator;
         typedef typename input_type::size_type      size_type;
+        typedef typename token_type::string_type    string_type;
 
 
-        TokenSequence(const LexerType& lexer, ErrorReporting& reporting, const_iterator inputBegin, const_iterator inputEnd) noexcept
+        TokenSequence(const LexerType& lexer, ErrorReporting& reporting, const_iterator inputBegin, const_iterator inputEnd)
             : lexer_(lexer), reporting_(reporting), inputBegin_(inputBegin), inputEnd_(inputEnd), currentToken_(inputBegin)
         {
         }
@@ -98,6 +65,15 @@ namespace Derp
         virtual tokenid_type Peek() const
         {
             return hasToken() ? currentToken_->getId() : tokenid_type::Invalid;
+        }
+
+        virtual token_type PeekToken() const
+        {
+            return hasToken()
+                ? *currentToken_
+                : inputBegin_ != inputEnd_
+                    ? *(currentToken_ - 1)
+                    : token_type(tokenid_type::Invalid, 0, L"");
         }
 
         virtual bool Skip(tokenid_type tokenId)
@@ -148,13 +124,13 @@ namespace Derp
             return false;
         }
 
-        virtual bool TestText(tokenid_type tokenId, const std::wstring& text)
+        virtual bool TestText(tokenid_type tokenId, const string_type& text)
         {
             token_type outputToken;
             return hasToken() ? internal_TestText(tokenId, text, outputToken) : false;
         }
 
-        virtual bool TestText(tokenid_type tokenId, const std::wstring& text, token_type& outputToken)
+        virtual bool TestText(tokenid_type tokenId, const string_type& text, token_type& outputToken)
         {
             return hasToken() ? internal_TestText(tokenId, text, outputToken) : false;
         }
@@ -179,6 +155,12 @@ namespace Derp
             return hasToken() ? internal_Expect(tokenId, outputToken) : false;
         }
 
+        virtual bool Expect(const std::initializer_list<tokenid_type>& tokenidList)
+        {
+            token_type outputToken;
+            return Expect(tokenidList, outputToken);
+        }
+
         virtual bool Expect(const std::initializer_list<tokenid_type>& tokenidList, token_type& outputToken)
         {
             if (hasToken() && tokenidList.size())
@@ -191,7 +173,7 @@ namespace Derp
                     }
                 }
 
-                std::wstring tokenString;
+                string_type tokenString;
                 size_t countDown = tokenidList.size() - 1;
                 for (auto tokenId : tokenidList)
                 {
@@ -208,18 +190,18 @@ namespace Derp
                     --countDown;
                 }
 
-                reporting_.ReportError(L"Expected " + tokenString);
+                reporting_.ReportError(currentToken_->getLine(), L"Expected " + tokenString);
             }
 
             return false;
         }
 
-        virtual bool ExpectText(tokenid_type tokenId, const std::wstring& text, token_type& outputToken)
+        virtual bool ExpectText(tokenid_type tokenId, const string_type& text, token_type& outputToken)
         {
             return hasToken() ? internal_ExpectText(tokenId, text, outputToken) : false;
         }
 
-        virtual bool ExpectText(tokenid_type tokenId, const std::wstring& text)
+        virtual bool ExpectText(tokenid_type tokenId, const string_type& text)
         {
             token_type outputToken;
 
@@ -242,7 +224,7 @@ namespace Derp
             return false;
         }
 
-        virtual bool internal_TestText(tokenid_type tokenId, const std::wstring& text, token_type& outputToken)
+        virtual bool internal_TestText(tokenid_type tokenId, const string_type& text, token_type& outputToken)
         {
             if (currentToken_->getId() == tokenId && currentToken_->getText() == text)
             {
@@ -261,21 +243,21 @@ namespace Derp
                 return true;
             }
 
-            reporting_.ReportError(L"Expected `" + lexer_.getTokenName(tokenId) + L"`");
+            reporting_.ReportError(currentToken_->getLine(), L"Expected `" + lexer_.getTokenName(tokenId) + L"`");
             return false;
         }
 
-        virtual bool internal_ExpectText(tokenid_type tokenId, const std::wstring& text, token_type& outputToken)
+        virtual bool internal_ExpectText(tokenid_type tokenId, const string_type& text, token_type& outputToken)
         {
             if (currentToken_->getId() != tokenId)
             {
-                reporting_.ReportError(L"Expected `" + lexer_.getTokenName(tokenId) + L"`");
+                reporting_.ReportError(currentToken_->getLine(), L"Expected `" + lexer_.getTokenName(tokenId) + L"`");
                 return false;
             }
 
             if (currentToken_->getText() != text)
             {
-                reporting_.ReportError(L"Expected `" + text + L"` following `" + lexer_.getTokenName(tokenId) + L"`");
+                reporting_.ReportError(currentToken_->getLine(), L"Expected `" + text + L"` following `" + lexer_.getTokenName(tokenId) + L"`");
                 return false;
             }
 
@@ -284,7 +266,7 @@ namespace Derp
             return true;
         }
 
-        virtual void internal_Next() noexcept
+        virtual void internal_Next()
         {
             currentToken_++;
         }
